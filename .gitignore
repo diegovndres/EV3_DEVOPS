@@ -1,0 +1,24 @@
+# Variables de entorno - NUNCA subir al repositorio
+.env
+*.env
+
+# MacOS
+.DS_Store
+
+# Compilados Java
+target/
+*.jar
+*.class
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Docker
+*.log

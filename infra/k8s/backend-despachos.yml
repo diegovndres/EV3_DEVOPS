@@ -1,0 +1,84 @@
+# ============================================================
+# Backend Despachos — Deployment + Service
+# - Imagen desde Amazon ECR (URL completa reemplazada en CI/CD)
+# - Credenciales BD cargadas desde K8s Secret (no en texto plano)
+# - Resources definidos para permitir HPA
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-despachos
+  labels:
+    app: backend-despachos
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend-despachos
+  template:
+    metadata:
+      labels:
+        app: backend-despachos
+    spec:
+      containers:
+        - name: backend-despachos
+          # La URL completa de ECR es inyectada por el pipeline CI/CD
+          # Formato: <account>.dkr.ecr.<region>.amazonaws.com/innovatech-backend-despachos:<sha>
+          image: innovatech-backend-despachos:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          # Resources necesarios para que el HPA pueda calcular uso de CPU
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:mysql://mysql:3306/innovatech_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+            # Credenciales desde Secret (no hardcodeadas)
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: SPRING_DATASOURCE_USERNAME
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: SPRING_DATASOURCE_PASSWORD
+            - name: SPRING_JPA_HIBERNATE_DDL_AUTO
+              value: update
+          # Readiness probe: K8s espera que el pod esté listo antes de enviar tráfico
+          readinessProbe:
+            httpGet:
+              path: /api/v1/despachos
+              port: 8081
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 3
+          # Liveness probe: K8s reinicia el pod si deja de responder
+          livenessProbe:
+            httpGet:
+              path: /api/v1/despachos
+              port: 8081
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-despachos
+spec:
+  selector:
+    app: backend-despachos
+  ports:
+    - port: 8081
+      targetPort: 8081
+  # ClusterIP: accesible internamente por DNS (backend-despachos:8081)
+  type: ClusterIP
