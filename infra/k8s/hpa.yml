@@ -1,0 +1,81 @@
+# ============================================================
+# HPA — Horizontal Pod Autoscaler
+#
+# Escala automáticamente los pods cuando el uso de CPU
+# supera el 50% del valor solicitado (requests.cpu).
+#
+# Justificación del umbral 50%:
+#   - Un umbral bajo (ej. 30%) escala muy agresivamente y
+#     genera costos innecesarios en períodos normales.
+#   - Un umbral alto (ej. 80%) reacciona tarde ante picos de
+#     tráfico, afectando la disponibilidad.
+#   - 50% es el balance recomendado para APIs REST en producción:
+#     deja margen para absorber picos mientras mantiene pods
+#     activos eficientemente.
+#
+# Rango de réplicas: min 1 → max 4 por servicio
+# Para probar el autoscaling:
+#   kubectl run -i --tty load-generator --rm --image=busybox \
+#     --restart=Never -- /bin/sh -c \
+#     "while sleep 0.01; do wget -q -O- http://backend-ventas:8080/api/v1/ventas; done"
+# ============================================================
+
+# --- Backend Ventas ---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-backend-ventas
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend-ventas
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+---
+# --- Backend Despachos ---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-backend-despachos
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend-despachos
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+---
+# --- Frontend ---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-frontend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: frontend
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
