@@ -179,6 +179,26 @@ resource "aws_eks_cluster" "eks" {
   }
 }
 
+resource "aws_launch_template" "workers_lt" {
+  name_prefix = "innovatech-workers-"
+
+  # Fija el hop-limit del IMDS en 2. Por defecto EKS lo crea en 1, lo que
+  # bloquea a los pods (ej. Fluent Bit) para obtener credenciales de
+  # LabRole via el servicio de metadata de EC2 (169.254.169.254).
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+  }
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name = "innovatech-workers"
+    }
+  }
+}
+
 resource "aws_eks_node_group" "workers" {
   cluster_name    = aws_eks_cluster.eks.name
   node_group_name = "workers"
@@ -198,8 +218,9 @@ resource "aws_eks_node_group" "workers" {
   instance_types = ["t3.medium"]
   capacity_type  = "ON_DEMAND"
 
-  remote_access {
-    ec2_ssh_key = null
+  launch_template {
+    id      = aws_launch_template.workers_lt.id
+    version = "$Latest"
   }
 
   tags = {
