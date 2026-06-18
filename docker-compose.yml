@@ -1,0 +1,106 @@
+services:
+  # ── BASE DE DATOS ─────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    container_name: mysql_db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    
+    networks:
+      - app_net
+  
+  # ── BACKEND VENTAS ────────────────────────────────────────
+  backend-ventas:
+  
+    build:
+      context: ./back-Ventas_SpringBoot
+      dockerfile: Dockerfile
+    image: innovatech-backend-ventas:latest
+    container_name: backend_ventas_app
+  
+    ports:
+      - "3000:8080"
+    environment:
+  
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+  
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  # ── BACKEND DESPACHOS ─────────────────────────────────────
+  backend-despachos:
+    
+    build:
+      context: ./back-Despachos_SpringBoot
+      dockerfile: Dockerfile
+    image: innovatech-backend-despachos:latest
+    container_name: backend_despachos_app
+    
+    ports:
+      - "8080:8081"
+    
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app_net
+  # ── FRONTEND (Vite + React + Nginx) ────────────────────────
+  frontend:
+    
+    build:
+      context: ./front_despacho
+      dockerfile: Dockerfile
+    image: innovatech-frontend:latest
+    container_name: frontend_app
+    
+    ports:
+      - "80:80"
+    
+    environment:
+      VITE_API_URL: http://localhost:8081/api
+    
+    depends_on:
+      - backend-ventas
+      - backend-despachos
+    restart: unless-stopped
+    networks:
+      - app_net
+
+# ── VOLÚMENES ─────────────────────────────────────────────────
+
+volumes:
+  mysql_data:
+    driver: local
+
+# ── REDES ─────────────────────────────────────────────────────
+
+networks:
+  app_net:
+    driver: bridge

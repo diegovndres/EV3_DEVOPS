@@ -1,0 +1,84 @@
+# ============================================================
+# Backend Ventas — Deployment + Service
+# - Imagen desde Amazon ECR (URL completa reemplazada en CI/CD)
+# - Credenciales BD cargadas desde K8s Secret (no en texto plano)
+# - Resources definidos para permitir HPA
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-ventas
+  labels:
+    app: backend-ventas
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend-ventas
+  template:
+    metadata:
+      labels:
+        app: backend-ventas
+    spec:
+      containers:
+        - name: backend-ventas
+          # La URL completa de ECR es inyectada por el pipeline CI/CD
+          # Formato: <account>.dkr.ecr.<region>.amazonaws.com/innovatech-backend-ventas:<sha>
+          image: innovatech-backend-ventas:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          # Resources necesarios para que el HPA pueda calcular uso de CPU
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:mysql://mysql:3306/innovatech_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+            # Credenciales desde Secret (no hardcodeadas)
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: SPRING_DATASOURCE_USERNAME
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: SPRING_DATASOURCE_PASSWORD
+            - name: SPRING_JPA_HIBERNATE_DDL_AUTO
+              value: update
+          # Readiness probe: K8s espera que el pod esté listo antes de enviar tráfico
+          readinessProbe:
+            httpGet:
+              path: /api/v1/ventas
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 3
+          # Liveness probe: K8s reinicia el pod si deja de responder
+          livenessProbe:
+            httpGet:
+              path: /api/v1/ventas
+              port: 8080
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-ventas
+spec:
+  selector:
+    app: backend-ventas
+  ports:
+    - port: 8080
+      targetPort: 8080
+  # ClusterIP: accesible internamente por DNS (backend-ventas:8080)
+  type: ClusterIP

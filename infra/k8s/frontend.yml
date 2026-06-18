@@ -1,0 +1,63 @@
+# ============================================================
+# Frontend (React + Nginx) — Deployment + Service
+# - Expuesto públicamente via LoadBalancer (EKS crea un AWS ELB)
+# - Comunicación al backend via DNS interno de K8s
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          # La URL completa de ECR es inyectada por el pipeline CI/CD
+          image: innovatech-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+# Service tipo LoadBalancer: EKS provisiona automáticamente un AWS ELB
+# La URL pública del frontend se obtiene con:
+#   kubectl get service frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+  type: LoadBalancer

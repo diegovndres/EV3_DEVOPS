@@ -1,0 +1,197 @@
+name: CI/CD - Build, Push y Deploy en AWS EKS
+
+# ============================================================
+# Trigger: push a la rama 'deploy' ejecuta el pipeline completo
+# Flujo: build → push a ECR → deploy en EKS
+# ============================================================
+on:
+  push:
+    branches:
+      - deploy
+
+jobs:
+  deploy:
+    name: Build, Push y Deploy
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      CLUSTER_NAME: innovatech-cluster
+
+    steps:
+      # ----------------------------------------------------------
+      # 1. Clonar el repositorio
+      # ----------------------------------------------------------
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------------
+      # 2. Configurar credenciales AWS (desde GitHub Secrets)
+      # ----------------------------------------------------------
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ----------------------------------------------------------
+      # 3. Login en Amazon ECR
+      # ----------------------------------------------------------
+      - name: Login en Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ----------------------------------------------------------
+      # 4. Obtener Account ID y construir URLs de ECR
+      # ----------------------------------------------------------
+      - name: Obtener Account ID de AWS
+        run: |
+          echo "ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_ENV
+
+      - name: Construir URLs de repositorios ECR
+        run: |
+          echo "VENTAS_ECR=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/innovatech-backend-ventas" >> $GITHUB_ENV
+          echo "DESPACHOS_ECR=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/innovatech-backend-despachos" >> $GITHUB_ENV
+          echo "FRONTEND_ECR=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/innovatech-frontend" >> $GITHUB_ENV
+
+      # ----------------------------------------------------------
+      # 5. BUILD de imágenes (multi-platform para EKS en linux/amd64)
+      # ----------------------------------------------------------
+      - name: Build imagen backend-ventas
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            -t $VENTAS_ECR:${{ github.sha }} \
+            -t $VENTAS_ECR:latest \
+            ./back-Ventas_SpringBoot \
+            --load
+
+      - name: Build imagen backend-despachos
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            -t $DESPACHOS_ECR:${{ github.sha }} \
+            -t $DESPACHOS_ECR:latest \
+            ./back-Despachos_SpringBoot \
+            --load
+
+      - name: Build imagen frontend
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            -t $FRONTEND_ECR:${{ github.sha }} \
+            -t $FRONTEND_ECR:latest \
+            ./front_despacho \
+            --load
+
+      # ----------------------------------------------------------
+      # 6. PUSH de imágenes a ECR
+      # ----------------------------------------------------------
+      - name: Push backend-ventas a ECR
+        run: |
+          docker push $VENTAS_ECR:${{ github.sha }}
+          docker push $VENTAS_ECR:latest
+
+      - name: Push backend-despachos a ECR
+        run: |
+          docker push $DESPACHOS_ECR:${{ github.sha }}
+          docker push $DESPACHOS_ECR:latest
+
+      - name: Push frontend a ECR
+        run: |
+          docker push $FRONTEND_ECR:${{ github.sha }}
+          docker push $FRONTEND_ECR:latest
+
+      # ----------------------------------------------------------
+      # 7. Instalar kubectl y conectar con EKS
+      # ----------------------------------------------------------
+      - name: Instalar kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Conectar con el clúster EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region $AWS_REGION \
+            --name $CLUSTER_NAME
+
+      # ----------------------------------------------------------
+      # 8. Crear secrets en K8s (si no existen)
+      # Los valores vienen de GitHub Secrets, nunca del código
+      # ----------------------------------------------------------
+      - name: Crear secrets MySQL en Kubernetes
+        run: |
+          kubectl create secret generic mysql-secret \
+            --from-literal=MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }} \
+            --from-literal=MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }} \
+            --from-literal=MYSQL_USER=${{ secrets.MYSQL_USER }} \
+            --from-literal=MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
+            --from-literal=SPRING_DATASOURCE_USERNAME=${{ secrets.MYSQL_USER }} \
+            --from-literal=SPRING_DATASOURCE_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # ----------------------------------------------------------
+      # 9. DEPLOY: aplicar manifiestos Kubernetes
+      # ----------------------------------------------------------
+      - name: Aplicar manifiesto de MySQL
+        run: kubectl apply -f infra/k8s/mysql.yml
+
+      # Esperamos a que MySQL esté realmente listo (acepta conexiones)
+      # antes de desplegar los backends. Esto reemplaza al
+      # "depends_on: condition: service_healthy" que se usa en docker-compose
+      # y que Kubernetes no tiene por defecto.
+      - name: Esperar a que MySQL esté listo
+        run: kubectl rollout status deployment/mysql --timeout=180s
+
+      - name: Aplicar manifiestos de los backends y el frontend
+        run: |
+          kubectl apply -f infra/k8s/backend-ventas.yml
+          kubectl apply -f infra/k8s/backend-despachos.yml
+          kubectl apply -f infra/k8s/frontend.yml
+          kubectl apply -f infra/k8s/hpa.yml
+
+      - name: Aplicar Fluent Bit (logs de pods hacia CloudWatch)
+        run: kubectl apply -f infra/k8s/cloudwatch-logging.yml
+
+      # ----------------------------------------------------------
+      # 10. Actualizar imágenes con el SHA del commit (immutable tags)
+      # ----------------------------------------------------------
+      - name: Actualizar imagen backend-ventas
+        run: |
+          kubectl set image deployment/backend-ventas \
+            backend-ventas=$VENTAS_ECR:${{ github.sha }}
+
+      - name: Actualizar imagen backend-despachos
+        run: |
+          kubectl set image deployment/backend-despachos \
+            backend-despachos=$DESPACHOS_ECR:${{ github.sha }}
+
+      - name: Actualizar imagen frontend
+        run: |
+          kubectl set image deployment/frontend \
+            frontend=$FRONTEND_ECR:${{ github.sha }}
+
+      # ----------------------------------------------------------
+      # 11. Verificar rollout (esperar que los pods estén listos)
+      # ----------------------------------------------------------
+      - name: Verificar despliegue backend-ventas
+        run: kubectl rollout status deployment/backend-ventas --timeout=180s
+
+      - name: Verificar despliegue backend-despachos
+        run: kubectl rollout status deployment/backend-despachos --timeout=180s
+
+      - name: Verificar despliegue frontend
+        run: kubectl rollout status deployment/frontend --timeout=120s
+
+      # ----------------------------------------------------------
+      # 12. Validación final: mostrar estado del clúster y URL pública
+      # ----------------------------------------------------------
+      - name: Estado final del clúster
+        run: |
+          echo "=== PODS ==="
+          kubectl get pods -o wide
+          echo "=== SERVICES ==="
+          kubectl get services
+          echo "=== HPA ==="
+          kubectl get hpa
+          echo "=== URL PUBLICA FRONTEND ==="
+          kubectl get service frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
