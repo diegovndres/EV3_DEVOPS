@@ -170,6 +170,10 @@ resource "aws_eks_cluster" "eks" {
     endpoint_private_access = true
   }
 
+  # Logging del control plane hacia CloudWatch Logs.
+  # EKS crea automaticamente el log group /aws/eks/innovatech-cluster/cluster
+  enabled_cluster_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
+
   tags = {
     Name = "innovatech-cluster"
   }
