@@ -3,7 +3,7 @@ name: CI/CD - Build, Push y Deploy en AWS EKS
 # ============================================================
 # Trigger: push a la rama 'deploy' ejecuta el pipeline completo
 # Flujo: build → push a ECR → deploy en EKS
-# ============================================================
+# =============================================================
 on:
   push:
     branches:
